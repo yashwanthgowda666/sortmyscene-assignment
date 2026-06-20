@@ -4,7 +4,8 @@ const Seat = require('../models/Seat');
 const Reservation = require('../models/Reservation');
 const auth = require('../middleware/auth');
 
-// POST /api/reserve - Reserve seats
+// reserve seats for 10 mins. this is the trickiest part of the whole assignment -
+// need to make sure two people cant grab the same seat at the same time
 router.post('/', auth, async (req, res) => {
     try {
         const { eventId, seatIds } = req.body;
@@ -13,9 +14,11 @@ router.post('/', auth, async (req, res) => {
             return res.status(400).json({ message: 'eventId and seatIds are required' });
         }
 
-        // atomically update each seat — only if still available
-        // this is the core double booking prevention
-        const updatePromises = seatIds.map(seatId =>
+        // tried using mongoose transactions here first but atlas free tier
+        // doesnt support them (needs a replica set). findOneAndUpdate with a
+        // status check in the filter does the same job - mongo treats the
+        // find + update as one atomic step so theres no race condition
+        const updateJobs = seatIds.map(seatId =>
             Seat.findOneAndUpdate(
                 { _id: seatId, status: 'available' },
                 { $set: { status: 'reserved' } },
@@ -23,28 +26,27 @@ router.post('/', auth, async (req, res) => {
             )
         );
 
-        const updatedSeats = await Promise.all(updatePromises);
+        const updatedSeats = await Promise.all(updateJobs);
 
-        // if any seat came back null, it was already taken
-        const failedSeats = updatedSeats.filter(seat => seat === null);
-        if (failedSeats.length > 0) {
-            // roll back seats that did get reserved in this request
-            const reservedInThisCall = updatedSeats
-                .filter(seat => seat !== null)
-                .map(seat => seat._id);
+        // null means someone else already took that seat before us
+        const seatsThatFailed = updatedSeats.filter(s => s === null);
+
+        if (seatsThatFailed.length > 0) {
+            // some seats in this batch DID succeed though, so we need to undo those
+            // otherwise we'd end up partially reserving someone's selection
+            const idsToRollback = updatedSeats
+                .filter(s => s !== null)
+                .map(s => s._id);
 
             await Seat.updateMany(
-                { _id: { $in: reservedInThisCall } },
+                { _id: { $in: idsToRollback } },
                 { $set: { status: 'available' } }
             );
 
-            return res.status(409).json({
-                message: 'One or more seats are no longer available'
-            });
+            return res.status(409).json({ message: 'One or more seats are no longer available' });
         }
 
-        // 10 min expiry
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min hold
 
         const reservation = await Reservation.create({
             userId: req.user.userId,
@@ -59,28 +61,28 @@ router.post('/', auth, async (req, res) => {
             expiresAt
         });
 
-    } catch (error) {
-        res.status(500).json({ message: 'something went wrong', error: error.message });
+    } catch (err) {
+        res.status(500).json({ message: 'something went wrong', error: err.message });
     }
 });
 
-// DELETE /api/reserve/:reservationId - Cancel an active reservation
+// lets a user free up their own reservation early instead of waiting
+// out the full 10 min timer. wasn't in the original brief but felt
+// like a basic thing a real user would expect
 router.delete('/:reservationId', auth, async (req, res) => {
     try {
         const { reservationId } = req.params;
-
         const reservation = await Reservation.findById(reservationId);
 
         if (!reservation) {
             return res.status(404).json({ message: 'Reservation not found' });
         }
 
-        // only the user who made it can cancel it
+        // cant let user A cancel user B's reservation just by guessing the id
         if (reservation.userId.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized' });
         }
 
-        // free up the seats
         await Seat.updateMany(
             { _id: { $in: reservation.seatNumbers } },
             { $set: { status: 'available' } }
@@ -90,11 +92,9 @@ router.delete('/:reservationId', auth, async (req, res) => {
 
         res.status(200).json({ message: 'Reservation cancelled, seats released' });
 
-    } catch (error) {
-        res.status(500).json({ message: 'something went wrong', error: error.message });
+    } catch (err) {
+        res.status(500).json({ message: 'something went wrong', error: err.message });
     }
 });
-
-
 
 module.exports = router;
