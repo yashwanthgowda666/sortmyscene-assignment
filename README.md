@@ -4,7 +4,7 @@ A simplified event ticket booking flow built with the MERN stack, focused on sea
 
 Built as part of the hiring assignment for the **Full Stack Developer (MERN + React Native)** role at SortMyScene.
 
-🔗 **Live Demo:** [sortmyscene-assignment-gules.vercel.app](https://sortmyscene-assignment-gules.vercel.app)
+🔗 **Live Demo:** [sortmyscene-live.vercel.app](https://sortmyscene-live.vercel.app/login)
 🔗 **Backend API:** [sortmyscene-assignment-cbde.onrender.com](https://sortmyscene-assignment-cbde.onrender.com)
 
 > ⚠️ The backend is hosted on Render's free tier, which spins down after inactivity. The first request after idle time may take 20–30 seconds to respond while it wakes up.
